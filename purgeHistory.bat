@@ -1,0 +1,2 @@
+python purgeHistory.py
+pause
