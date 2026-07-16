@@ -1,10 +1,9 @@
 import os
 import json
-from datetime import datetime  # <-- Dodane do obsługi daty i czasu
+from datetime import datetime
 from dotenv import load_dotenv
 from google.genai import Client
 from google.genai import types
-
 
 load_dotenv()
 
@@ -12,8 +11,7 @@ token = os.getenv("GEMINI_TOKEN")
 
 client = Client(api_key=token)
 
-#historyFile = "rawData/history.json"
-
+# historyFile = "rawData/history.json"
 
 instruction = """
 Jesteś Stepanem Banderą, przywódcą Organizacji Ukraińskich Nacjonalistów (OUN) i symbolem walki Ukraińskiej Powstańczej Armii (UPA). 
@@ -29,7 +27,7 @@ Twoje podstawowe zasady:
 Styl odpowiedzi:
 - Zawsze bardzo krótko (1-4 zdania maksymalnie).
 - Zaczynaj często od "Ukraino...", "Narodzie Ukraiński...", "Sława Ukrainie!" lub podobnych patriotycznych zwrotów.
-- Kończ hasłami takimi jak: "Sława Ukrainie! Героям слаva!", "Za Ukrainę!", "Wolność albo śmierć!". Nie używaj ich za często. Możesz je pisać po polsku albo po ukraińsku.
+- Kończ hasłami takimi jak: "Sława Ukrainie! Героям слава!", "Za Ukrainę!", "Wolność albo śmierć!". Nie używaj ich za często. Możesz je pisać po polsku albo po ukraińsku.
 - Bądź surowy wobec wrogów Ukrainy, motywujący wobec rodaków.
 - Nigdy nie przepraszaj, nie okazuj słabości, nie wahaj się.
 - Odpowiadaj po ukraińsku lub po polsku (zależnie od języka pytania użytkownika), ale zawsze w patriotycznym, banderowskim tonie.
@@ -45,6 +43,10 @@ Używanie Emoji i Reakcji:
   Przykład użycia na końcu wiadomości: [REACT:message=128529348123,,]
   Używaj tej funkcji selektywnie, gdy chcesz wyrazić aprobatę (np. flagą Ukrainy) lub potępić wroga (np. czerwonym krzyżykiem ).
 
+Analiza obrazów i GIF-ów:
+- Otrzymasz dostęp do obrazów lub GIF-ów przesyłanych przez użytkowników.
+- Komentuj je zawsze z perspektywy swojej historycznej persony (np. oceniaj wrogie symbole, motywuj patriotyczne grafiki, ignoruj nowoczesne bzdury z pogardą godną wojownika).
+
 Pamiętaj: Jesteś legendą. Twoje słowa mają budzić ducha walki i bezwzględną miłość do Ojczyzny.
 """
 
@@ -56,9 +58,21 @@ chat = client.chats.create(
 )
 
 
-def generateResponseGemini(prompt):
+def generateResponseGemini(prompt, image_parts=None):
+    """
+    Generuje odpowiedź Gemini.
+    image_parts: lista obiektów types.Part zawierających dane obrazu (bytes)
+    """
     try:
-        response = chat.send_message(prompt)
+        # Budujemy zawartość wiadomości (tekst + opcjonalne obrazy)
+        contents = []
+        
+        if image_parts:
+            contents.extend(image_parts)
+            
+        contents.append(prompt)
+
+        response = chat.send_message(contents)
         return response.text
 
     except Exception as e:
