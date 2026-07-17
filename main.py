@@ -3,6 +3,7 @@ import re
 import io
 import discord
 import aiohttp
+from aiohttp import web
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from google.genai import types
@@ -84,6 +85,10 @@ async def fetch_reply_chain(message: discord.Message, channel, max_depth=10):
 @client.event
 async def on_ready():
     print(f"Zalogowano jako {client.user}")
+
+    if not hasattr(client, "web_started"):
+        client.web_started = True
+        await start_webserver()
 
 
 @client.event
@@ -206,5 +211,19 @@ async def on_message(message: discord.Message):
         except Exception as e:
             await message.reply(f"Wystąpił błąd podczas przetwarzania: `{e}`")
 
+async def healthcheck(request):
+    return web.Response(text="OK")
+
+async def start_webserver():
+    app = web.Application()
+    app.router.add_get("/", healthcheck)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"HTTP server listening on port {port}")
 
 client.run(TOKEN)
