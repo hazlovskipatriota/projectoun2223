@@ -30,7 +30,7 @@ user_dm_state = {}
 
 
 async def get_games_from_firebase():
-    """Pobiera asynchronicznie listę gier z kolekcji Firestore za pomocą publicznego REST API projektu"""
+    """Pobiera asynchronicznie listę gier wraz ze wszystkimi polami z kolekcji Firestore"""
     url = f"https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT_ID}/databases/(default)/documents/games"
     try:
         async with aiohttp.ClientSession() as session:
@@ -42,21 +42,47 @@ async def get_games_from_firebase():
                     
                     for doc in documents:
                         fields = doc.get("fields", {})
+                        if not fields:
+                            continue
+                            
+                        # Pobranie tytułu zapisanego jako "name" w bazie danych
+                        name_field = fields.get("name")
+                        title = name_field.get("stringValue") if name_field else "Nieznany Tytuł"
                         
-                        title_field = fields.get("title") or fields.get("Title")
-                        desc_field = fields.get("description") or fields.get("Description")
+                        # Zbieranie wszystkich pozostałych informacji o grze w jeden czytelny kontekst
+                        extra_details = []
+                        for key, value in fields.items():
+                            if key == "name":  # Tytuł został już pobrany
+                                continue
+                            
+                            # Wyciąganie wartości w zależności od typu danych w Firestore REST API
+                            val_content = None
+                            if "stringValue" in value:
+                                val_content = value["stringValue"]
+                            elif "integerValue" in value:
+                                val_content = value["integerValue"]
+                            elif "booleanValue" in value:
+                                val_content = "Tak" if value["booleanValue"] else "Nie"
+                            elif "arrayValue" in value:
+                                values = value["arrayValue"].get("values", [])
+                                val_content = ", ".join([v.get("stringValue", "") for v in values if "stringValue" in v])
+                            
+                            if val_content:
+                                extra_details.append(f"- **{key.capitalize()}**: {val_content}")
                         
-                        title = title_field.get("stringValue") if title_field else "Nieznany Tytuł"
-                        description = desc_field.get("stringValue") if desc_field else "Brak opisu."
+                        full_description = "\n".join(extra_details) if extra_details else "Brak dodatkowych szczegółów."
                         
-                        games_list.append({"title": title, "description": description})
+                        games_list.append({
+                            "title": title,
+                            "description": full_description
+                        })
                     
                     if games_list:
                         return games_list
     except Exception as e:
         print(f"Błąd podczas odczytu struktury Firestore REST API: {e}")
         
-    return [{"title": "Boku no Headshot: Resurrection", "description": "Dynamiczny shooter akcji stworzony dla prawdziwych wojowników."}]
+    return [{"title": "Boku no Headshot: Resurrection", "description": "- **Opis**: Dynamiczny shooter akcji stworzony dla prawdziwych wojowników."}]
 
 
 async def send_log_transcript(user, content, direction="USER -> BOT"):
@@ -130,7 +156,7 @@ async def fetch_reply_chain(message: discord.Message, channel, max_depth=10):
 
 @tasks.loop(hours=24)
 async def daily_game_promotion_task():
-    """Wysyła raz dziennie wiadomość prywatną reklamującą losową grę z kolekcji Firestore games/"""
+    """Wysyła raz dziennie wiadomość prywatną reklamującą losową grę z kompletem informacji z Firestore"""
     await client.wait_until_ready()
     games = await get_games_from_firebase()
     if not games:
@@ -149,10 +175,12 @@ async def daily_game_promotion_task():
                 continue
 
             chosen_game = random.choice(games)
+            
+            # Skonstruowanie bogatej w szczegóły wiadomości promocyjnej
             promo_msg = (
                 f"Sława! Odkryj produkcje z **UPA Games Launcher**!\n"
-                f"Polecamy zagrać w: **{chosen_game.get('title')}**\n"
-                f"Opis gry: *{chosen_game.get('description')}*\n"
+                f"Prezentujemy dziś tytuł: **{chosen_game.get('title')}**\n\n"
+                f"**Pełne informacje o grze:**\n{chosen_game.get('description')}\n\n"
                 f"Uruchom swój UPA Games Launcher i ruszaj do walki!"
             )
 
