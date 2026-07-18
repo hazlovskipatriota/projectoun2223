@@ -14,13 +14,12 @@ from gemini import generateResponseGemini, generateImageImagen
 
 load_dotenv()
 
-TOKEN = os.getenv("DISCORD_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+TOKEN = os.getenv("DISCORD_TOKEN")[cite: 3]
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))[cite: 3]
 LOG_CHANNEL_ID = 1528172889143119872
 
-# Firebase configuration
-FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID")
-FIREBASE_API_KEY = os.getenv("FIREBASE_API_KEY")
+# Konfiguracja Firebase pobrana bezpośrednio ze zmiennych w .env
+FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID")[cite: 3]
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -29,26 +28,39 @@ intents.members = True
 client = discord.Client(intents=intents)
 
 # Pamięć podręczna przechowująca stan blokad i promocji DM
-# Struktura: { user_id: { "last_promo": date, "blocked_until": date } }
 user_dm_state = {}
 
 
 async def get_games_from_firebase():
-    """Pobiera listę gier bezpośrednio z Firebase Realtime Database za pomocą REST API"""
-    url = f"https://{FIREBASE_PROJECT_ID}-default-rtdb.firebaseio.com/games.json?auth={FIREBASE_API_KEY}"
+    """Pobiera asynchronicznie listę gier z kolekcji Firestore za pomocą publicznego REST API projektu"""
+    # Adres URL struktury REST API Firestore dla publicznych danych w kolekcji 'games'
+    url = f"https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT_ID}/databases/(default)/documents/games"[cite: 3]
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=5) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    if data:
-                        if isinstance(data, list):
-                            return [g for g in data if g]
-                        elif isinstance(data, dict):
-                            return list(data.values())
+                    documents = data.get("documents", [])
+                    games_list = []
+                    
+                    for doc in documents:
+                        fields = doc.get("fields", {})
+                        
+                        # Mapowanie struktury typów danych w Firestore REST API (np. stringValue)
+                        title_field = fields.get("title") or fields.get("Title")
+                        desc_field = fields.get("description") or fields.get("Description")
+                        
+                        title = title_field.get("stringValue") if title_field else "Nieznany Tytuł"
+                        description = desc_field.get("stringValue") if desc_field else "Brak opisu."
+                        
+                        games_list.append({"title": title, "description": description})
+                    
+                    if games_list:
+                        return games_list
     except Exception as e:
-        print(f"Błąd podczas pobierania danych z Firebase: {e}")
-    # W razie braku połączenia lub pustej bazy zwraca domyślną grę
+        print(f"Błąd podczas odczytu struktury Firestore REST API: {e}")
+        
+    # Rezerwowy fallback w przypadku błędu autoryzacji lub pustej bazy danych
     return [{"title": "Boku no Headshot: Resurrection", "description": "Dynamiczny shooter akcji stworzony dla prawdziwych wojowników."}]
 
 
@@ -122,7 +134,7 @@ async def fetch_reply_chain(message: discord.Message, channel, max_depth=10):
 
 @tasks.loop(hours=24)
 async def daily_game_promotion_task():
-    """Wysyła raz dziennie wiadomość prywatną reklamującą losową grę z UPA Games Launcher do wszystkich użytkowników"""
+    """Wysyła raz dziennie wiadomość prywatną reklamującą losową grę z kolekcji Firestore games/"""
     await client.wait_until_ready()
     games = await get_games_from_firebase()
     if not games:
@@ -143,8 +155,8 @@ async def daily_game_promotion_task():
             chosen_game = random.choice(games)
             promo_msg = (
                 f"Sława! Odkryj produkcje z **UPA Games Launcher**!\n"
-                f"Polecamy zagrać w: **{chosen_game.get('title', 'Nieznany Tytuł')}**\n"
-                f"Opis gry: *{chosen_game.get('description', 'Brak opisu gier w bazie.')}*\n"
+                f"Polecamy zagrać w: **{chosen_game.get('title')}**\n"
+                f"Opis gry: *{chosen_game.get('description')}*\n"
                 f"Uruchom swój UPA Games Launcher i ruszaj do walki!"
             )
 
@@ -223,7 +235,6 @@ async def on_message(message: discord.Message):
 
         async with message.channel.typing():
             response = generateResponseGemini(dm_context_prompt)
-            # Usuwamy tagi serwerowe, jeśli model przez przypadek by je wygenerował w DM
             response = re.sub(r"\[TIMEOUT:[^\]]+\]", "", response)
             response = re.sub(r"\[REACT:[^\]]+\]", "", response)
             
@@ -234,7 +245,7 @@ async def on_message(message: discord.Message):
     # ------------------------------------------------------------------------
     # STANDARDOWA OBSŁUGA KANAŁÓW PUBLICZNYCH NA SERWERZE
     # ------------------------------------------------------------------------
-    is_main_channel = (message.channel.id == CHANNEL_ID)
+    is_main_channel = (message.channel.id == CHANNEL_ID)[cite: 3]
 
     try:
         context_prompt = ""
@@ -396,7 +407,7 @@ async def on_message(message: discord.Message):
 
     except Exception as e:
         if is_main_channel:
-            await message.reply(f"Wystąpił błąd podczas przetwarzania: `{e}`")
+            await message.reply(f"Wystąpił błąd podczas przetwarzania: `{e}`")[cite: 3]
 
 
 async def healthcheck(request):
@@ -414,4 +425,4 @@ async def start_webserver():
     await site.start()
     print(f"HTTP server listening on port {port}")
 
-client.run(TOKEN)
+client.run(TOKEN)[cite: 3]
