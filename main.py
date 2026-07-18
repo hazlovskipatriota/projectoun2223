@@ -31,6 +31,7 @@ user_dm_state = {}
 
 async def get_games_from_firebase():
     """Pobiera asynchronicznie listę gier wraz ze wszystkimi polami z kolekcji Firestore"""
+    print("[Firebase] Rozpoczynam pobieranie gier z Firestore...")
     url = f"https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT_ID}/databases/(default)/documents/games"
     try:
         async with aiohttp.ClientSession() as session:
@@ -45,17 +46,14 @@ async def get_games_from_firebase():
                         if not fields:
                             continue
                             
-                        # Pobranie tytułu zapisanego jako "name" w bazie danych
                         name_field = fields.get("name")
                         title = name_field.get("stringValue") if name_field else "Nieznany Tytuł"
                         
-                        # Zbieranie wszystkich pozostałych informacji o grze w jeden czytelny kontekst
                         extra_details = []
                         for key, value in fields.items():
-                            if key == "name":  # Tytuł został już pobrany
+                            if key == "name":
                                 continue
                             
-                            # Wyciąganie wartości w zależności od typu danych w Firestore REST API
                             val_content = None
                             if "stringValue" in value:
                                 val_content = value["stringValue"]
@@ -78,10 +76,12 @@ async def get_games_from_firebase():
                         })
                     
                     if games_list:
+                        print(f"[Firebase] Pomyślnie pobrano {len(games_list)} gier.")
                         return games_list
     except Exception as e:
-        print(f"Błąd podczas odczytu struktury Firestore REST API: {e}")
+        print(f"[Firebase BŁĄD] Błąd podczas odczytu struktury Firestore REST API: {e}")
         
+    print("[Firebase] Zwracam fallback (domyślną grę).")
     return [{"title": "Boku no Headshot: Resurrection", "description": "- **Opis**: Dynamiczny shooter akcji stworzony dla prawdziwych wojowników."}]
 
 
@@ -100,16 +100,19 @@ async def send_log_transcript(user, content, direction="USER -> BOT"):
         try:
             await log_channel.send(embed=embed)
         except Exception as e:
-            print(f"Nie udało się wysłać transkrypcji na kanał logów: {e}")
+            print(f"[Logi BŁĄD] Nie udało się wysłać transkrypcji na kanał logów: {e}")
 
 
 async def download_image_as_part(url: str, mime_type: str):
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as resp:
-            if resp.status == 200:
-                from google.genai import types
-                data = await resp.read()
-                return types.Part.from_bytes(data=data, mime_type=mime_type)
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=5) as resp:
+                if resp.status == 200:
+                    from google.genai import types
+                    data = await resp.read()
+                    return types.Part.from_bytes(data=data, mime_type=mime_type)
+    except Exception as e:
+        print(f"[Obrazy BŁĄD] Nie udało się pobrać obrazu z załącznika: {e}")
     return None
 
 
@@ -132,7 +135,7 @@ async def extract_and_fetch_links(text: str) -> str:
                         page_text = " ".join(soup.get_text().split())[:1500]
                         links_context += f"Link: {url}\nTytuł strony: {title}\nTreść strony (skrót): {page_text}\n---\n"
             except Exception as e:
-                links_context += f"Link: {url} (Nie udało się pobrać zawartości: {e})\n"
+                links_context += f"[Linki BŁĄD] Link: {url} (Błąd pobierania: {e})\n"
     return links_context
 
 
@@ -140,31 +143,37 @@ async def fetch_reply_chain(message: discord.Message, channel, max_depth=10):
     chain = []
     current_msg = message
     depth = 0
-    while current_msg.reference and current_msg.reference.message_id and depth < max_depth:
-        try:
+    try:
+        while current_msg.reference and current_msg.reference.message_id and depth < max_depth:
             ref_id = current_msg.reference.message_id
+            # Zabezpieczenie przed zapętleniem na tej samej wiadomości
+            if any(m.id == ref_id for m in chain) or current_msg.id == ref_id:
+                break
             parent_msg = await channel.fetch_message(ref_id)
             chain.append(parent_msg)
             current_msg = parent_msg
             depth += 1
-        except Exception as e:
-            print(f"Przerwano pobieranie łańcucha na głębokości {depth}: {e}")
-            break
+    except discord.Forbidden:
+        print("[Wątek] Brak uprawnień do pobierania historii wątków wiadomości.")
+    except Exception as e:
+        print(f"[Wątek BŁĄD] Przerwano pobieranie łańcucha na głębokości {depth}: {e}")
     chain.reverse()
     return chain
 
 
-@tasks.loop(hours=24)
-async def daily_game_promotion_task():
-    """Wysyła raz dziennie wiadomość prywatną reklamującą losową grę z kompletem informacji z Firestore"""
-    await client.wait_until_ready()
+async def execute_promotion_broadcast():
+    """Wspólna logika rozsyłania promocji (używana przez harmonogram i komendę)"""
+    print("[Promocja] Rozpoczynam procedurę rozsyłania wiadomości promocyjnych...")
     games = await get_games_from_firebase()
     if not games:
+        print("[Promocja Alert] Brak gier do zareklamowania.")
         return
 
     today = datetime.date.today()
+    counter = 0
 
     for guild in client.guilds:
+        print(f"[Promocja] Przeszukuję serwer: {guild.name}")
         for member in guild.members:
             if member.bot:
                 continue
@@ -175,8 +184,6 @@ async def daily_game_promotion_task():
                 continue
 
             chosen_game = random.choice(games)
-            
-            # Skonstruowanie bogatej w szczegóły wiadomości promocyjnej
             promo_msg = (
                 f"Sława! Odkryj produkcje z **UPA Games Launcher**!\n"
                 f"Prezentujemy dziś tytuł: **{chosen_game.get('title')}**\n\n"
@@ -188,15 +195,27 @@ async def daily_game_promotion_task():
                 await member.send(promo_msg)
                 state["last_promo"] = today
                 await send_log_transcript(member, promo_msg, direction="BOT -> USER (PROMO)")
+                counter += 1
             except discord.Forbidden:
-                print(f"Zablokowane wiadomości prywatne dla użytkownika: {member.display_name}")
+                print(f"[Promocja Info] Zablokowane DM u użytkownika: {member.display_name}")
             except Exception as e:
-                print(f"Błąd wysyłania promocji: {e}")
+                print(f"[Promocja BŁĄD] Nie udało się wysłać wiadomości do {member.display_name}: {e}")
+    
+    print(f"[Promocja Koniec] Wysłano łącznie {counter} wiadomości promocyjnych.")
+
+
+@tasks.loop(hours=24)
+async def daily_game_promotion_task():
+    """Automatyczny harmonogram 24h"""
+    await client.wait_until_ready()
+    await execute_promotion_broadcast()
 
 
 @client.event
 async def on_ready():
-    print(f"Zalogowano jako {client.user}")
+    print(f"=========================================")
+    print(f"Zalogowano pomyślnie jako: {client.user}")
+    print(f"=========================================")
     
     if not daily_game_promotion_task.is_running():
         daily_game_promotion_task.start()
@@ -214,15 +233,25 @@ async def on_message(message: discord.Message):
     if message.channel.id == LOG_CHANNEL_ID:
         return
 
+    # KOMENDA WYMUSZENIA: Resetuje blokady i natychmiast wysyła reklamy
+    if message.content.strip() == "!promocja":
+        print(f"[Komenda] Użytkownik {message.author.display_name} wymusił wysyłkę promocji za pomocą !promocja.")
+        user_dm_state.clear()  # Resetuje blokady czasowe (blocked_until) i liczniki promocyjne (last_promo)
+        await message.reply(" Pamięć podręczna blokad została wyczyszczona. Uruchamiam natychmiastowe rozsyłanie reklam gier z Firebase do wszystkich użytkowników...")
+        await execute_promotion_broadcast()
+        return
+
     # ------------------------------------------------------------------------
     # OBSŁUGA WIADOMOŚCI PRYWATNYCH (DM)
     # ------------------------------------------------------------------------
     if isinstance(message.channel, discord.DMChannel):
+        print(f"[Wiadomość DM] Otrzymano od {message.author.display_name}: '{message.content}'")
         user_id = message.author.id
         today = datetime.date.today()
         state = user_dm_state.setdefault(user_id, {"last_promo": None, "blocked_until": None})
 
         if state["blocked_until"] == today:
+            print(f"[Wiadomość DM] Ignoruję - użytkownik {message.author.display_name} posiada aktywną blokadę na dziś.")
             return
 
         await send_log_transcript(message.author, message.content, direction="USER -> BOT")
@@ -233,10 +262,13 @@ async def on_message(message: discord.Message):
             "bądź konkretnych tytułów gier – odpowiedz wyłącznie słowem 'TAK'. "
             "Jeśli tekst schodzi na jakikolwiek inny temat, pyta o sprawy prywatne, politykę, pogodę lub cokolwiek spoza świata gier – odpowiedz wyłącznie słowem 'NIE'."
         )
+        
+        print("[Gemini] Wysyłam zapytanie walidacyjne dla wiadomości DM...")
         validation_res = generateResponseGemini(
             prompt=f"Oceń intencję wiadomości: \"{message.content}\"",
             custom_instruction=validation_instruction
         )
+        print(f"[Gemini Log] Wynik walidacji tematu: {validation_res.strip()}")
 
         if "NIE" in validation_res.upper():
             state["blocked_until"] = today
@@ -311,12 +343,14 @@ async def on_message(message: discord.Message):
         )
 
         if is_main_channel:
+            print(f"[Kanał Główny] Przetwarzam nową wiadomość od {message.author.display_name}...")
             async with message.channel.typing():
                 response = generateResponseGemini(context_prompt, image_parts=image_parts)
         else:
             response = generateResponseGemini(context_prompt, image_parts=image_parts)
             if not any(tag in response for tag in ["[TIMEOUT", "[REACT", "[GENERATE_IMAGE"]):
                 return
+            print(f"[Kanał Poboczny] Bot wykrył tagi akcji/moderacji w wypowiedzi użytkownika {message.author.display_name}!")
 
         channel_context = message.channel.typing() if not is_main_channel else None
         if channel_context:
@@ -347,21 +381,21 @@ async def on_message(message: discord.Message):
 
                     try:
                         await target_message.delete()
-                        print(f"Usunięto szkodliwą wiadomość o ID {target_msg_id}.")
+                        print(f"[Moderacja] Usunięto szkodliwą wiadomość o ID {target_msg_id}.")
                     except discord.Forbidden:
-                        print("Brak uprawnień bota (Manage Messages) do usunięcia wiadomości!")
+                        print("[Moderacja BŁĄD] Brak uprawnień bota (Manage Messages) do usunięcia wiadomości!")
                     except Exception as delete_error:
-                        print(f"Błąd podczas usuwania wiadomości: {delete_error}")
+                        print(f"[Moderacja BŁĄD] Błąd podczas usuwania wiadomości: {delete_error}")
 
                     if isinstance(member, discord.Member):
                         duration = datetime.timedelta(seconds=seconds)
                         await member.timeout(duration, reason="Szkodliwe zachowanie potępione przez Stepana Banderę.")
-                        print(f"Wyciszono użytkownika {member.display_name} na {seconds} sekund.")
+                        print(f"[Moderacja] Pomyślnie wyciszono użytkownika {member.display_name} na {seconds} sekund.")
                     else:
-                        print("Nie można nałożyć timeoutu - użytkownik nie jest na serwerze.")
+                        print("[Moderacja Alert] Nie można nałożyć timeoutu - użytkownik nie jest na serwerze.")
 
                 except Exception as timeout_error:
-                    print(f"Nie udało się pobrać wiadomości lub nałożyć timeoutu: {timeout_error}")
+                    print(f"[Moderacja BŁĄD] Nie udało się pobrać wiadomości lub nałożyć timeoutu: {timeout_error}")
 
                 response = re.sub(timeout_pattern, "", response, flags=re.IGNORECASE).strip()
 
@@ -379,9 +413,9 @@ async def on_message(message: discord.Message):
                         try:
                             await target_message.add_reaction(emoji)
                         except discord.HTTPException as r_err:
-                            print(f"Błąd dodawania reakcji '{emoji}': {r_err}")
+                            print(f"[Reakcje BŁĄD] Błąd dodawania reakcji '{emoji}': {r_err}")
                 except Exception as fetch_err:
-                    print(f"Nie znaleziono wiadomości do reakcji ID {target_message_id}: {fetch_err}")
+                    print(f"[Reakcje BŁĄD] Nie znaleziono wiadomości do reakcji ID {target_message_id}: {fetch_err}")
 
                 response = re.sub(react_pattern, "", response, flags=re.IGNORECASE).strip()
 
@@ -391,7 +425,9 @@ async def on_message(message: discord.Message):
 
             if image_match:
                 image_prompt = image_match.group(1).strip()
+                print(f"[Imagen] Rozpoczynam generowanie grafiki dla promptu: {image_prompt}")
                 image_bytes = generateImageImagen(image_prompt)
+
                 response = re.sub(image_pattern, "", response, flags=re.IGNORECASE).strip()
 
             final_response = citation_prefix + response
@@ -422,6 +458,7 @@ async def on_message(message: discord.Message):
                 await channel_context.__aexit__(None, None, None)
 
     except Exception as e:
+        print(f"[BŁĄD ZDARZENIA] Wyjątek w sekcji on_message: {e}")
         if is_main_channel:
             await message.reply(f"Wystąpił błąd podczas przetwarzania: `{e}`")
 
@@ -439,6 +476,6 @@ async def start_webserver():
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"HTTP server listening on port {port}")
+    print(f"[Serwer HTTP] Serwer nasłuchuje na porcie: {port}")
 
 client.run(TOKEN)
