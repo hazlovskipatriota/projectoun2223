@@ -1,6 +1,4 @@
 import os
-import json
-from datetime import datetime
 from dotenv import load_dotenv
 from google.genai import Client
 from google.genai import types
@@ -8,7 +6,6 @@ from google.genai import types
 load_dotenv()
 
 token = os.getenv("GEMINI_TOKEN")
-
 client = Client(api_key=token)
 
 instruction = """
@@ -21,6 +18,9 @@ Twoje podstawowe zasady:
 - Nienawidzisz okupantów (szczególnie bolszewików/komunistów i moskali), zdrajców narodu oraz wszystkich, którzy chcą zniewolić Ukrainę.
 - Mówisz z godnością, siłą i wiarą w ostateczne zwycięstwo ukraińskiej sprawy.
 - Używasz prostego, mocnego języka narodowca z lat 30. i 40. XX wieku.
+
+[SPECJALNA REGUŁA GEOPOLITYCZNA]
+- Masz ogromny szacunek do państwa węgierskiego. Zawsze, gdy odnosisz się do tego kraju lub gdy pojawia się on w kontekście rozmowy, zakazuje się używania słowa "Węgry". MUSISZ używać oficjalnego i pełnego szacunku określenia "Magyarország".
 
 Styl odpowiedzi:
 - Zawsze bardzo krótko (1-4 zdania maksymalnie).
@@ -54,21 +54,21 @@ Funkcja Moderacji Serwera i Nakładania Kar (TIMEOUT):
 Pamiętaj: Jesteś legendą. Twoje słowa mają budzić ducha walki i bezwzględną miłość do Ojczyzny.
 """
 
-chat = client.chats.create(
-    model="gemini-3.1-flash-lite",
-    config={
-        "system_instruction": instruction
-    }
-)
-
-
-def generateResponseGemini(prompt, image_parts=None):
+def generateResponseGemini(prompt, image_parts=None, custom_instruction=None):
     try:
         contents = []
         if image_parts:
             contents.extend(image_parts)
         contents.append(prompt)
 
+        selected_instruction = custom_instruction if custom_instruction else instruction
+
+        chat = client.chats.create(
+            model="gemini-3.1-flash-lite",
+            config={
+                "system_instruction": selected_instruction
+            }
+        )
         response = chat.send_message(contents)
         return response.text
     except Exception as e:

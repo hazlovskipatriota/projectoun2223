@@ -2,12 +2,13 @@ import os
 import re
 import io
 import datetime
+import random
 import discord
 import aiohttp
 from aiohttp import web
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from google.genai import types
+from discord.ext import tasks
 
 from gemini import generateResponseGemini, generateImageImagen
 
@@ -15,12 +16,58 @@ load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+LOG_CHANNEL_ID = 1528172889143119872
+
+# Firebase configuration
+FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID")
+FIREBASE_API_KEY = os.getenv("FIREBASE_API_KEY")
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
 client = discord.Client(intents=intents)
+
+# Pamięć podręczna przechowująca stan blokad i promocji DM
+# Struktura: { user_id: { "last_promo": date, "blocked_until": date } }
+user_dm_state = {}
+
+
+async def get_games_from_firebase():
+    """Pobiera listę gier bezpośrednio z Firebase Realtime Database za pomocą REST API"""
+    url = f"https://{FIREBASE_PROJECT_ID}-default-rtdb.firebaseio.com/games.json?auth={FIREBASE_API_KEY}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=5) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data:
+                        if isinstance(data, list):
+                            return [g for g in data if g]
+                        elif isinstance(data, dict):
+                            return list(data.values())
+    except Exception as e:
+        print(f"Błąd podczas pobierania danych z Firebase: {e}")
+    # W razie braku połączenia lub pustej bazy zwraca domyślną grę
+    return [{"title": "Boku no Headshot: Resurrection", "description": "Dynamiczny shooter akcji stworzony dla prawdziwych wojowników."}]
+
+
+async def send_log_transcript(user, content, direction="USER -> BOT"):
+    """Przesyła zapis rozmowy w DM na wskazany w konfiguracji kanał tekstowy logów"""
+    log_channel = client.get_channel(LOG_CHANNEL_ID)
+    if log_channel:
+        embed = discord.Embed(
+            title=f"Transkrypcja DM [{direction}]",
+            description=content,
+            color=0x00ff00 if "BOT" in direction else 0x00aaff,
+            timestamp=datetime.datetime.utcnow()
+        )
+        avatar_url = user.avatar.url if user.avatar else None
+        embed.set_author(name=f"{user.name}", icon_url=avatar_url)
+        try:
+            await log_channel.send(embed=embed)
+        except Exception as e:
+            print(f"Nie udało się wysłać transkrypcji na kanał logów: {e}")
 
 
 async def download_image_as_part(url: str, mime_type: str) -> types.Part:
@@ -73,9 +120,50 @@ async def fetch_reply_chain(message: discord.Message, channel, max_depth=10):
     return chain
 
 
+@tasks.loop(hours=24)
+async def daily_game_promotion_task():
+    """Wysyła raz dziennie wiadomość prywatną reklamującą losową grę z UPA Games Launcher do wszystkich użytkowników"""
+    await client.wait_until_ready()
+    games = await get_games_from_firebase()
+    if not games:
+        return
+
+    today = datetime.date.today()
+
+    for guild in client.guilds:
+        for member in guild.members:
+            if member.bot:
+                continue
+
+            state = user_dm_state.setdefault(member.id, {"last_promo": None, "blocked_until": None})
+            
+            if state["last_promo"] == today:
+                continue
+
+            chosen_game = random.choice(games)
+            promo_msg = (
+                f"Sława! Odkryj produkcje z **UPA Games Launcher**!\n"
+                f"Polecamy zagrać w: **{chosen_game.get('title', 'Nieznany Tytuł')}**\n"
+                f"Opis gry: *{chosen_game.get('description', 'Brak opisu gier w bazie.')}*\n"
+                f"Uruchom swój UPA Games Launcher i ruszaj do walki!"
+            )
+
+            try:
+                await member.send(promo_msg)
+                state["last_promo"] = today
+                await send_log_transcript(member, promo_msg, direction="BOT -> USER (PROMO)")
+            except discord.Forbidden:
+                print(f"Zablokowane wiadomości prywatne dla użytkownika: {member.display_name}")
+            except Exception as e:
+                print(f"Błąd wysyłania promocji: {e}")
+
+
 @client.event
 async def on_ready():
     print(f"Zalogowano jako {client.user}")
+    
+    if not daily_game_promotion_task.is_running():
+        daily_game_promotion_task.start()
 
     if not hasattr(client, "web_started"):
         client.web_started = True
@@ -87,6 +175,65 @@ async def on_message(message: discord.Message):
     if message.author == client.user or message.author.bot:
         return
 
+    # REGUŁA: Bot całkowicie ignoruje jakiekolwiek skanowanie wiadomości na kanale logów transkrypcji
+    if message.channel.id == LOG_CHANNEL_ID:
+        return
+
+    # ------------------------------------------------------------------------
+    # SEKRECYJNA OBSŁUGA WIADOMOŚCI PRYWATNYCH (DM)
+    # ------------------------------------------------------------------------
+    if isinstance(message.channel, discord.DMChannel):
+        user_id = message.author.id
+        today = datetime.date.today()
+        state = user_dm_state.setdefault(user_id, {"last_promo": None, "blocked_until": None})
+
+        # Sprawdzenie, czy użytkownik ma zablokowaną konwersację na dzisiaj
+        if state["blocked_until"] == today:
+            return
+
+        # Logowanie przychodzącej wiadomości od użytkownika
+        await send_log_transcript(message.author, message.content, direction="USER -> BOT")
+
+        # Krok A: Weryfikacja tematu wiadomości za pomocą Gemini
+        validation_instruction = (
+            "Jesteś surowym i dokładnym filtrem tematów konwersacji. Twoim jedynym zadaniem jest analiza tekstu. "
+            "Jeśli wiadomość dotyczy gier komputerowych, tworzenia gier, mechanik growych, platformy UPA Games Launcher, "
+            "bądź konkretnych tytułów gier – odpowiedz wyłącznie słowem 'TAK'. "
+            "Jeśli tekst schodzi na jakikolwiek inny temat, pyta o sprawy prywatne, politykę, pogodę lub cokolwiek spoza świata gier – odpowiedz wyłącznie słowem 'NIE'."
+        )
+        validation_res = generateResponseGemini(
+            prompt=f"Oceń intencję wiadomości: \"{message.content}\"",
+            custom_instruction=validation_instruction
+        )
+
+        if "NIE" in validation_res.upper():
+            state["blocked_until"] = today
+            warn_response = "Wykryto temat niezwiązany z grami. Prowadzenie wiadomości prywatnych w dniu dzisiejszym zostaje zablokowane."
+            await message.channel.send(warn_response)
+            await send_log_transcript(message.author, warn_response, direction="BOT -> USER (BLOKADA)")
+            return
+
+        # Krok B: Wygenerowanie odpowiedzi w klimacie Stepana Bandery na temat gier
+        dm_context_prompt = (
+            f"[KONTEKST WIADOMOŚCI PRYWATNEJ - TEMATYKA GIER]\n"
+            f"Rozmawiasz z użytkownikiem w wiadomościach prywatnych wyłącznie o grach (szczególnie z UPA Games Launcher). "
+            f"Zachowaj swój rewolucyjny charakter narodowy i pamiętaj, by szanować Magyarország i używać tej nazwy.\n\n"
+            f"Wiadomość użytkownika: {message.content}"
+        )
+
+        async with message.channel.typing():
+            response = generateResponseGemini(dm_context_prompt)
+            # Usuwamy tagi serwerowe, jeśli model przez przypadek by je wygenerował w DM
+            response = re.sub(r"\[TIMEOUT:[^\]]+\]", "", response)
+            response = re.sub(r"\[REACT:[^\]]+\]", "", response)
+            
+            await message.channel.send(response)
+            await send_log_transcript(message.author, response, direction="BOT -> USER (ODPOWIEDŹ)")
+        return
+
+    # ------------------------------------------------------------------------
+    # STANDARDOWA OBSŁUGA KANAŁÓW PUBLICZNYCH NA SERWERZE
+    # ------------------------------------------------------------------------
     is_main_channel = (message.channel.id == CHANNEL_ID)
 
     try:
@@ -146,11 +293,11 @@ async def on_message(message: discord.Message):
             await channel_context.__aenter__()
 
         try:
-            # 3. Obsługa tagu kary: [TIMEOUT:message=ID,seconds=SEC]
+            # Obsługa tagu kary: [TIMEOUT:message=ID,seconds=SEC]
             timeout_pattern = r"\[TIMEOUT:message=(\d+),seconds=(\d+)\]"
             timeout_match = re.search(timeout_pattern, response, re.IGNORECASE)
             
-            citation_prefix = ""  # Tutaj trafi wygenerowany cytat usuniętej wiadomości
+            citation_prefix = ""
 
             if timeout_match:
                 target_msg_id = int(timeout_match.group(1))
@@ -161,7 +308,6 @@ async def on_message(message: discord.Message):
                     target_message = await message.channel.fetch_message(target_msg_id)
                     member = target_message.author
                     
-                    # Przygotowanie cytatu Markdown ZANIM usuniemy wiadomość
                     citation_content = target_message.content if target_message.content else "[Załącznik/Obraz]"
                     citation_prefix = (
                         f"**Wykryto wrogą działalność!**\n"
@@ -170,7 +316,6 @@ async def on_message(message: discord.Message):
                         f" *Wyrok: Wyciszenie na {seconds} sekund.*\n\n"
                     )
 
-                    # Usuwanie karygodnej wiadomości
                     try:
                         await target_message.delete()
                         print(f"Usunięto szkodliwą wiadomość o ID {target_msg_id}.")
@@ -179,7 +324,6 @@ async def on_message(message: discord.Message):
                     except Exception as delete_error:
                         print(f"Błąd podczas usuwania wiadomości: {delete_error}")
 
-                    # Nakładanie kary wyciszenia (timeout)
                     if isinstance(member, discord.Member):
                         duration = datetime.timedelta(seconds=seconds)
                         await member.timeout(duration, reason="Szkodliwe zachowanie potępione przez Stepana Banderę.")
@@ -190,10 +334,9 @@ async def on_message(message: discord.Message):
                 except Exception as timeout_error:
                     print(f"Nie udało się pobrać wiadomości lub nałożyć timeoutu: {timeout_error}")
 
-                # Usunięcie samego tagu [TIMEOUT:...] z tekstu odpowiedzi bota
                 response = re.sub(timeout_pattern, "", response, flags=re.IGNORECASE).strip()
 
-            # 4. Obsługa tagu reakcji: [REACT:message=ID,emoji1,emoji2...]
+            # Obsługa tagu reakcji: [REACT:message=ID,emoji1,emoji2...]
             react_pattern = r"\[REACT:message=(\d+),([^\]]+)\]"
             react_match = re.search(react_pattern, response, re.IGNORECASE)
 
@@ -214,7 +357,7 @@ async def on_message(message: discord.Message):
 
                 response = re.sub(react_pattern, "", response, flags=re.IGNORECASE).strip()
 
-            # 5. Obsługa tagu generowania obrazu: [GENERATE_IMAGE: prompt]
+            # Obsługa tagu generowania obrazu: [GENERATE_IMAGE: prompt]
             image_pattern = r"\[GENERATE_IMAGE:(.*?)\]"
             image_match = re.search(image_pattern, response, re.IGNORECASE)
             image_bytes = None
@@ -224,10 +367,8 @@ async def on_message(message: discord.Message):
                 image_bytes = generateImageImagen(image_prompt)
                 response = re.sub(image_pattern, "", response, flags=re.IGNORECASE).strip()
 
-            # Łączymy wygenerowany cytat z właściwym pouczeniem od bota
             final_response = citation_prefix + response
 
-            # 6. Wysłanie odpowiedzi
             file_to_send = None
             if image_bytes:
                 file_to_send = discord.File(io.BytesIO(image_bytes), filename="propaganda.jpg")
@@ -239,8 +380,6 @@ async def on_message(message: discord.Message):
             else:
                 for idx, chunk in enumerate(chunks):
                     if idx == 0 and file_to_send:
-                        # W przypadku usunięcia wiadomości, na którą odpowiadamy, 
-                        # używamy zwykłego send() zamiast reply(), żeby uniknąć błędu braku wiadomości referencyjnej
                         if timeout_match:
                             await message.channel.send(chunk, file=file_to_send)
                         else:
