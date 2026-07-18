@@ -14,12 +14,11 @@ from gemini import generateResponseGemini, generateImageImagen
 
 load_dotenv()
 
-TOKEN = os.getenv("DISCORD_TOKEN")[cite: 3]
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))[cite: 3]
+TOKEN = os.getenv("DISCORD_TOKEN")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 LOG_CHANNEL_ID = 1528172889143119872
 
-# Konfiguracja Firebase pobrana bezpośrednio ze zmiennych w .env
-FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID")[cite: 3]
+FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID")
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -27,14 +26,12 @@ intents.members = True
 
 client = discord.Client(intents=intents)
 
-# Pamięć podręczna przechowująca stan blokad i promocji DM
 user_dm_state = {}
 
 
 async def get_games_from_firebase():
     """Pobiera asynchronicznie listę gier z kolekcji Firestore za pomocą publicznego REST API projektu"""
-    # Adres URL struktury REST API Firestore dla publicznych danych w kolekcji 'games'
-    url = f"https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT_ID}/databases/(default)/documents/games"[cite: 3]
+    url = f"https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT_ID}/databases/(default)/documents/games"
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=5) as resp:
@@ -46,7 +43,6 @@ async def get_games_from_firebase():
                     for doc in documents:
                         fields = doc.get("fields", {})
                         
-                        # Mapowanie struktury typów danych w Firestore REST API (np. stringValue)
                         title_field = fields.get("title") or fields.get("Title")
                         desc_field = fields.get("description") or fields.get("Description")
                         
@@ -60,7 +56,6 @@ async def get_games_from_firebase():
     except Exception as e:
         print(f"Błąd podczas odczytu struktury Firestore REST API: {e}")
         
-    # Rezerwowy fallback w przypadku błędu autoryzacji lub pustej bazy danych
     return [{"title": "Boku no Headshot: Resurrection", "description": "Dynamiczny shooter akcji stworzony dla prawdziwych wojowników."}]
 
 
@@ -82,10 +77,11 @@ async def send_log_transcript(user, content, direction="USER -> BOT"):
             print(f"Nie udało się wysłać transkrypcji na kanał logów: {e}")
 
 
-async def download_image_as_part(url: str, mime_type: str) -> types.Part:
+async def download_image_as_part(url: str, mime_type: str):
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
             if resp.status == 200:
+                from google.genai import types
                 data = await resp.read()
                 return types.Part.from_bytes(data=data, mime_type=mime_type)
     return None
@@ -187,26 +183,22 @@ async def on_message(message: discord.Message):
     if message.author == client.user or message.author.bot:
         return
 
-    # REGUŁA: Bot całkowicie ignoruje jakiekolwiek skanowanie wiadomości na kanale logów transkrypcji
     if message.channel.id == LOG_CHANNEL_ID:
         return
 
     # ------------------------------------------------------------------------
-    # SEKRECYJNA OBSŁUGA WIADOMOŚCI PRYWATNYCH (DM)
+    # OBSŁUGA WIADOMOŚCI PRYWATNYCH (DM)
     # ------------------------------------------------------------------------
     if isinstance(message.channel, discord.DMChannel):
         user_id = message.author.id
         today = datetime.date.today()
         state = user_dm_state.setdefault(user_id, {"last_promo": None, "blocked_until": None})
 
-        # Sprawdzenie, czy użytkownik ma zablokowaną konwersację na dzisiaj
         if state["blocked_until"] == today:
             return
 
-        # Logowanie przychodzącej wiadomości od użytkownika
         await send_log_transcript(message.author, message.content, direction="USER -> BOT")
 
-        # Krok A: Weryfikacja tematu wiadomości za pomocą Gemini
         validation_instruction = (
             "Jesteś surowym i dokładnym filtrem tematów konwersacji. Twoim jedynym zadaniem jest analiza tekstu. "
             "Jeśli wiadomość dotyczy gier komputerowych, tworzenia gier, mechanik growych, platformy UPA Games Launcher, "
@@ -225,7 +217,6 @@ async def on_message(message: discord.Message):
             await send_log_transcript(message.author, warn_response, direction="BOT -> USER (BLOKADA)")
             return
 
-        # Krok B: Wygenerowanie odpowiedzi w klimacie Stepana Bandery na temat gier
         dm_context_prompt = (
             f"[KONTEKST WIADOMOŚCI PRYWATNEJ - TEMATYKA GIER]\n"
             f"Rozmawiasz z użytkownikiem w wiadomościach prywatnych wyłącznie o grach (szczególnie z UPA Games Launcher). "
@@ -245,7 +236,7 @@ async def on_message(message: discord.Message):
     # ------------------------------------------------------------------------
     # STANDARDOWA OBSŁUGA KANAŁÓW PUBLICZNYCH NA SERWERZE
     # ------------------------------------------------------------------------
-    is_main_channel = (message.channel.id == CHANNEL_ID)[cite: 3]
+    is_main_channel = (message.channel.id == CHANNEL_ID)
 
     try:
         context_prompt = ""
@@ -304,7 +295,6 @@ async def on_message(message: discord.Message):
             await channel_context.__aenter__()
 
         try:
-            # Obsługa tagu kary: [TIMEOUT:message=ID,seconds=SEC]
             timeout_pattern = r"\[TIMEOUT:message=(\d+),seconds=(\d+)\]"
             timeout_match = re.search(timeout_pattern, response, re.IGNORECASE)
             
@@ -347,7 +337,6 @@ async def on_message(message: discord.Message):
 
                 response = re.sub(timeout_pattern, "", response, flags=re.IGNORECASE).strip()
 
-            # Obsługa tagu reakcji: [REACT:message=ID,emoji1,emoji2...]
             react_pattern = r"\[REACT:message=(\d+),([^\]]+)\]"
             react_match = re.search(react_pattern, response, re.IGNORECASE)
 
@@ -368,7 +357,6 @@ async def on_message(message: discord.Message):
 
                 response = re.sub(react_pattern, "", response, flags=re.IGNORECASE).strip()
 
-            # Obsługa tagu generowania obrazu: [GENERATE_IMAGE: prompt]
             image_pattern = r"\[GENERATE_IMAGE:(.*?)\]"
             image_match = re.search(image_pattern, response, re.IGNORECASE)
             image_bytes = None
@@ -407,7 +395,7 @@ async def on_message(message: discord.Message):
 
     except Exception as e:
         if is_main_channel:
-            await message.reply(f"Wystąpił błąd podczas przetwarzania: `{e}`")[cite: 3]
+            await message.reply(f"Wystąpił błąd podczas przetwarzania: `{e}`")
 
 
 async def healthcheck(request):
@@ -425,4 +413,4 @@ async def start_webserver():
     await site.start()
     print(f"HTTP server listening on port {port}")
 
-client.run(TOKEN)[cite: 3]
+client.run(TOKEN)
