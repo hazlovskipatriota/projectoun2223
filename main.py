@@ -53,33 +53,9 @@ async def get_games_from_firebase():
                             
                         name_field = fields.get("name")
                         title = name_field.get("stringValue") if name_field else "Nieznany Tytuł"
-                        
-<<<<<<< HEAD
                         # Pobranie opisu zapisanego jako "description" w bazie danych
                         desc_field = fields.get("description")
                         description = desc_field.get("stringValue") if desc_field else "Brak opisu."
-=======
-                        extra_details = []
-                        for key, value in fields.items():
-                            if key == "name":
-                                continue
-                            
-                            val_content = None
-                            if "stringValue" in value:
-                                val_content = value["stringValue"]
-                            elif "integerValue" in value:
-                                val_content = value["integerValue"]
-                            elif "booleanValue" in value:
-                                val_content = "Tak" if value["booleanValue"] else "Nie"
-                            elif "arrayValue" in value:
-                                values = value["arrayValue"].get("values", [])
-                                val_content = ", ".join([v.get("stringValue", "") for v in values if "stringValue" in v])
-                            
-                            if val_content:
-                                extra_details.append(f"- **{key.capitalize()}**: {val_content}")
-                        
-                        full_description = "\n".join(extra_details) if extra_details else "Brak dodatkowych szczegółów."
->>>>>>> f71d6ec984826975692834d91e9df79249dda23d
                         
                         games_list.append({
                             "title": title,
@@ -91,12 +67,8 @@ async def get_games_from_firebase():
                         return games_list
     except Exception as e:
         print(f"[Firebase BŁĄD] Błąd podczas odczytu struktury Firestore REST API: {e}")
-        
-<<<<<<< HEAD
-=======
     print("[Firebase] Zwracam fallback (domyślną grę).")
     return [{"title": "Boku no Headshot: Resurrection", "description": "- **Opis**: Dynamiczny shooter akcji stworzony dla prawdziwych wojowników."}]
->>>>>>> f71d6ec984826975692834d91e9df79249dda23d
 
 
 async def send_log_transcript(user, content, direction="USER -> BOT"):
@@ -196,21 +168,11 @@ async def execute_promotion_broadcast():
             
             if state["last_promo"] == today:
                 continue
-
             chosen_game = random.choice(games)
-<<<<<<< HEAD
-            
             # Skonstruowanie zapytania dla modelu i wygenerowanie reklamy przez AI
             prompt = (
                 f"Tytuł gry: {chosen_game.get('title')}\n"
                 f"Opis gry: {chosen_game.get('description')}"
-=======
-            promo_msg = (
-                f"Sława! Odkryj produkcje z **UPA Games Launcher**!\n"
-                f"Prezentujemy dziś tytuł: **{chosen_game.get('title')}**\n\n"
-                f"**Pełne informacje o grze:**\n{chosen_game.get('description')}\n\n"
-                f"Uruchom swój UPA Games Launcher i ruszaj do walki!"
->>>>>>> f71d6ec984826975692834d91e9df79249dda23d
             )
             
             custom_instruction = (
