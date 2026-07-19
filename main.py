@@ -374,7 +374,7 @@ async def on_message(message: discord.Message):
             if timeout_match:
                 target_msg_id = int(timeout_match.group(1))
                 seconds = int(timeout_match.group(2))
-                seconds = max(10, min(60, seconds))
+                seconds = max(1, min(10, seconds))
 
                 try:
                     target_message = await message.channel.fetch_message(target_msg_id)
