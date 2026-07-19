@@ -29,6 +29,11 @@ client = discord.Client(intents=intents)
 user_dm_state = {}
 
 
+def split_message(text, limit=2000):
+    """Dzieli tekst na części o maksymalnej długości `limit`."""
+    return [text[i:i+limit] for i in range(0, len(text), limit) if text[i:i+limit].strip()]
+
+
 async def get_games_from_firebase():
     """Pobiera asynchronicznie listę gier wraz ze wszystkimi polami z kolekcji Firestore"""
     url = f"https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT_ID}/databases/(default)/documents/games"
@@ -49,32 +54,13 @@ async def get_games_from_firebase():
                         name_field = fields.get("name")
                         title = name_field.get("stringValue") if name_field else "Nieznany Tytuł"
                         
-                        # Zbieranie wszystkich pozostałych informacji o grze w jeden czytelny kontekst
-                        extra_details = []
-                        for key, value in fields.items():
-                            if key == "name":  # Tytuł został już pobrany
-                                continue
-                            
-                            # Wyciąganie wartości w zależności od typu danych w Firestore REST API
-                            val_content = None
-                            if "stringValue" in value:
-                                val_content = value["stringValue"]
-                            elif "integerValue" in value:
-                                val_content = value["integerValue"]
-                            elif "booleanValue" in value:
-                                val_content = "Tak" if value["booleanValue"] else "Nie"
-                            elif "arrayValue" in value:
-                                values = value["arrayValue"].get("values", [])
-                                val_content = ", ".join([v.get("stringValue", "") for v in values if "stringValue" in v])
-                            
-                            if val_content:
-                                extra_details.append(f"- **{key.capitalize()}**: {val_content}")
-                        
-                        full_description = "\n".join(extra_details) if extra_details else "Brak dodatkowych szczegółów."
+                        # Pobranie opisu zapisanego jako "description" w bazie danych
+                        desc_field = fields.get("description")
+                        description = desc_field.get("stringValue") if desc_field else "Brak opisu."
                         
                         games_list.append({
                             "title": title,
-                            "description": full_description
+                            "description": description
                         })
                     
                     if games_list:
@@ -82,7 +68,6 @@ async def get_games_from_firebase():
     except Exception as e:
         print(f"Błąd podczas odczytu struktury Firestore REST API: {e}")
         
-    return [{"title": "Boku no Headshot: Resurrection", "description": "- **Opis**: Dynamiczny shooter akcji stworzony dla prawdziwych wojowników."}]
 
 
 async def send_log_transcript(user, content, direction="USER -> BOT"):
@@ -91,7 +76,7 @@ async def send_log_transcript(user, content, direction="USER -> BOT"):
     if log_channel:
         embed = discord.Embed(
             title=f"Transkrypcja DM [{direction}]",
-            description=content,
+            description=content[:4000],
             color=0x00ff00 if "BOT" in direction else 0x00aaff,
             timestamp=datetime.datetime.utcnow()
         )
@@ -176,16 +161,38 @@ async def daily_game_promotion_task():
 
             chosen_game = random.choice(games)
             
-            # Skonstruowanie bogatej w szczegóły wiadomości promocyjnej
-            promo_msg = (
-                f"Sława! Odkryj produkcje z **UPA Games Launcher**!\n"
-                f"Prezentujemy dziś tytuł: **{chosen_game.get('title')}**\n\n"
-                f"**Pełne informacje o grze:**\n{chosen_game.get('description')}\n\n"
-                f"Uruchom swój UPA Games Launcher i ruszaj do walki!"
+            # Skonstruowanie zapytania dla modelu i wygenerowanie reklamy przez AI
+            prompt = (
+                f"Tytuł gry: {chosen_game.get('title')}\n"
+                f"Opis gry: {chosen_game.get('description')}"
             )
+            
+            custom_instruction = (
+                "Jesteś Stepanem Banderą, przywódcą OUN i UPA. Twoim jedynym zadaniem jest stworzenie krótkiej, "
+                "porywającej i zachęcającej reklamy gry komputerowej z platformy UPA Games Launcher na podstawie "
+                "przesłanej nazwy i opisu. Reklama musi być napisana w Twoim charakterystycznym, rewolucyjnym, "
+                "żołnierskim i patriotycznym tonie ukraińskim i zagrzewać "
+                "do walki oraz uruchomienia gry. Nie używaj żadnych tagów moderacyjnych "
+                "typu [TIMEOUT...] ani [REACT...]."
+            )
+            
+            promo_msg = generateResponseGemini(prompt=prompt, custom_instruction=custom_instruction)
+            promo_msg = re.sub(r"\[TIMEOUT:[^\]]+\]", "", promo_msg)
+            promo_msg = re.sub(r"\[REACT:[^\]]+\]", "", promo_msg)
+            promo_msg = re.sub(r"\[GENERATE_IMAGE:[^\]]+\]", "", promo_msg).strip()
+            
+            if promo_msg.startswith("Błąd podczas generowania:"):
+                # Awaryjny fallback na wypadek problemów z API Gemini
+                promo_msg = (
+                    f"Sława! Odkryj produkcje z **UPA Games Launcher**!\n"
+                    f"Prezentujemy dziś tytuł: **{chosen_game.get('title')}**\n\n"
+                    f"**Opis gry:**\n{chosen_game.get('description')}\n\n"
+                    f"Uruchom swój UPA Games Launcher i ruszaj do walki!"
+                )
 
             try:
-                await member.send(promo_msg)
+                for chunk in split_message(promo_msg):
+                    await member.send(chunk)
                 state["last_promo"] = today
                 await send_log_transcript(member, promo_msg, direction="BOT -> USER (PROMO)")
             except discord.Forbidden:
@@ -257,7 +264,8 @@ async def on_message(message: discord.Message):
             response = re.sub(r"\[TIMEOUT:[^\]]+\]", "", response)
             response = re.sub(r"\[REACT:[^\]]+\]", "", response)
             
-            await message.channel.send(response)
+            for chunk in split_message(response):
+                await message.channel.send(chunk)
             await send_log_transcript(message.author, response, direction="BOT -> USER (ODPOWIEDŹ)")
         return
 
