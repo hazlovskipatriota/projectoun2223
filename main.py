@@ -9,7 +9,6 @@ import asyncio
 from aiohttp import web
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from discord.ext import tasks
 
 from gemini import generateResponseGemini, generateImageImagen
 
@@ -71,26 +70,6 @@ async def extract_and_fetch_links(text: str) -> str:
     return links_context
 
 
-async def fetch_reply_chain(message: discord.Message, channel, max_depth=10):
-    chain = []
-    current_msg = message
-    depth = 0
-    try:
-        while current_msg.reference and current_msg.reference.message_id and depth < max_depth:
-            ref_id = current_msg.reference.message_id
-            if any(m.id == ref_id for m in chain) or current_msg.id == ref_id:
-                break
-            parent_msg = await channel.fetch_message(ref_id)
-            chain.append(parent_msg)
-            current_msg = parent_msg
-            depth += 1
-    except discord.Forbidden:
-        print("[Wątek] Brak uprawnień do pobierania historii wątków wiadomości.")
-    except Exception as e:
-        print(f"[Wątek BŁĄD] Przerwano pobieranie łańcucha na głębokości {depth}: {e}")
-    chain.reverse()
-    return chain
-
 @client.event
 async def on_ready():
     print(f"=========================================")
@@ -119,31 +98,38 @@ async def start_webserver():
 
 @client.event
 async def on_voice_state_update(member, before, after):
-    if member.id == client.user.id:
-        return
+    # 1. Reakcja na wchodzenie ludzi na kanał
+    if member.id != client.user.id:
+        if after.channel and before.channel != after.channel:
+            voice_channel = after.channel
+            guild = voice_channel.guild
+            voice_client = discord.utils.get(client.voice_clients, guild=guild)
 
-    # Jeśli użytkownik dołączył do kanału, na którym wcześniej nie był
-    if after.channel and before.channel != after.channel:
-        voice_channel = after.channel
-        guild = voice_channel.guild
+            if not voice_client:
+                try:
+                    voice_client = await voice_channel.connect(timeout=10.0, reconnect=True)
+                    print(f"[Voice] Połączono z kanałem: {voice_channel.name}")
+                except Exception as e:
+                    print(f"[Voice BŁĄD] Nie można połączyć z kanałem: {e}")
+                    return
 
-        voice_client = discord.utils.get(client.voice_clients, guild=guild)
+            if voice_client and not voice_client.is_playing():
+                await play_song(voice_client)
 
-        if not voice_client:
-            try:
-                # Wymuszamy stabilne połączenie z kanałem
-                voice_client = await voice_channel.connect(timeout=10.0, reconnect=True)
-                print(f"[Voice] Połączono z kanałem: {voice_channel.name}")
-            except Exception as e:
-                print(f"[Voice BŁĄD] Nie można połączyć z kanałem: {e}")
-                return
+    # 2. Reakcja na opuszczanie kanału przez ludzi (samotność bota)
+    # Pobieramy klienta głosowego dla serwera, na którym nastąpiła zmiana strefy audio
+    guild = member.guild
+    voice_client = discord.utils.get(client.voice_clients, guild=guild)
+    
+    if voice_client and voice_client.channel:
+        # Liczba użytkowników na kanale (odliczając boty)
+        real_users = [m for m in voice_client.channel.members if not m.bot]
+        if len(real_users) == 0:
+            print(f"[Voice] Zostałem sam na kanale {voice_client.channel.name}. Rozłączam się.")
+            await voice_client.disconnect()
 
-        # Jeśli połączony i w tym momencie nic nie jest grane, zaczynamy odtwarzanie
-        if voice_client and not voice_client.is_playing():
-            await play_random_song(voice_client)
 
-
-async def play_random_song(voice_client):
+async def play_song(voice_client, specific_song=None):
     if not os.path.exists(SONGS_DIR):
         print(f"[Voice BŁĄD] Katalog '{SONGS_DIR}' nie istnieje!")
         return
@@ -151,32 +137,40 @@ async def play_random_song(voice_client):
     songs = [f for f in os.listdir(SONGS_DIR) if f.endswith(('.mp3', '.wav', '.ogg', '.m4a'))]
     
     if not songs:
-        print(f"[Voice] Brak plików muzycznych w folderze '{SONGS_DIR}'.")
+        print(f"[Voice] Brak plików muzycznych v folderze '{SONGS_DIR}'.")
         return
 
-    random_song = random.choice(songs)
-    song_path = os.path.join(SONGS_DIR, random_song)
+    # Wybór utworu: konkretny żądany lub losowy
+    if specific_song and specific_song in songs:
+        chosen_song = specific_song
+    else:
+        chosen_song = random.choice(songs)
 
-    print(f"[Voice] Odtwarzam plik: {random_song}")
+    song_path = os.path.join(SONGS_DIR, chosen_song)
+    print(f"[Voice] Odtwarzam plik: {chosen_song}")
     
+    # Zatrzymujemy bieżące odtwarzanie, jeśli bot już coś puszczał (przydatne przy skip/wymuszeniu piosenki)
+    if voice_client.is_playing():
+        voice_client.stop()
+
     def after_playing(error):
         if error:
             print(f"[Voice BŁĄD] Wyjątek strumienia audio: {error}")
         
-        if voice_client.channel and len(voice_client.channel.members) > 1:
-            coro = play_random_song(voice_client)
+        # Jeśli bot po zakończeniu piosenki nadal nie jest sam, gra dalej
+        if voice_client.channel and len([m for m in voice_client.channel.members if not m.bot]) > 0:
+            coro = play_song(voice_client)
             fut = asyncio.run_coroutine_threadsafe(coro, client.loop)
             try:
                 fut.result()
             except Exception as e:
-                print(f"[Voice BŁĄD] Błąd kolejki losowej: {e}")
+                print(f"[Voice BŁĄD] Błąd pętli muzycznej: {e}")
         else:
             coro = voice_client.disconnect()
             asyncio.run_coroutine_threadsafe(coro, client.loop)
-            print("[Voice] Kanał opustoszał. Rozłączanie.")
+            print("[Voice] Brak słuchaczy. Rozłączanie po utworze.")
 
     try:
-        # Opcja "-vn" wyłącza dekodowanie wideo z plików audio, co zapobiega crashom FFmpeg
         source = discord.FFmpegPCMAudio(song_path, options="-vn")
         voice_client.play(source, after=after_playing)
     except Exception as e:
@@ -195,6 +189,48 @@ async def on_message(message: discord.Message):
     if not (is_target_channel or is_dm or is_mentioned):
         return
 
+    content_lower = message.content.lower().strip()
+    voice_client = discord.utils.get(client.voice_clients, guild=message.guild)
+
+    # === MECHANIZM STEROWANIA MUZYKĄ PRZEZ TEKST ===
+    
+    # 1. Obsługa żądania pominięcia utworu (Skip)
+    if any(cmd in content_lower for cmd in ["skip", "następna", "nastepna", "przełącz piosenkę", "przelacz piosenke"]):
+        if voice_client and voice_client.is_playing():
+            await message.reply("Odrzucam ten syf, gramy dalej.")
+            voice_client.stop() # Wywołanie .stop() automatycznie odpala after_playing, który włączy kolejny losowy kawałek
+            return
+        else:
+            await message.reply("Nic teraz nie leci na kanale głosowym.")
+            return
+
+    # 2. Obsługa żądania włączenia konkretnego utworu
+    if "puść" in content_lower or "puść utwór" in content_lower or "zagraj" in content_lower:
+        if not voice_client:
+            await message.reply("Muszę być na kanale głosowym, żeby coś zagrać. Wejdź na kanał!")
+            return
+
+        if os.path.exists(SONGS_DIR):
+            songs = [f for f in os.listdir(SONGS_DIR) if f.endswith(('.mp3', '.wav', '.ogg', '.m4a'))]
+            matched_song = None
+            
+            # Szukanie dopasowania w nazwach plików
+            for song in songs:
+                # Sprawdzamy pełną nazwę pliku lub nazwę bez rozszerzenia
+                song_name_clean = os.path.splitext(song)[0].lower()
+                if song.lower() in content_lower or song_name_clean in content_lower:
+                    matched_song = song
+                    break
+            
+            if matched_song:
+                await message.reply(f"Włączam zamówiony utwór: {matched_song}")
+                await play_song(voice_client, specific_song=matched_song)
+                return
+            else:
+                await message.reply("Nie znalazłem takiej piosenki w moim spisie plików.")
+                return
+
+    # === STANDARDOWA OBSŁUGA CZATU GEMINI ===
     async with message.channel.typing():
         try:
             links_context = await extract_and_fetch_links(message.content)
