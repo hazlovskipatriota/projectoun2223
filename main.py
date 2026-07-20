@@ -118,6 +118,7 @@ async def start_webserver():
     await site.start()
     print(f"[Serwer HTTP] Serwer nasłuchuje na porcie: {port}")
 
+<<<<<<< HEAD
 
 @client.event
 async def on_voice_state_update(member, before, after):
@@ -193,6 +194,15 @@ async def on_message(message: discord.Message):
     if message.author == client.user:
         return
 
+=======
+@client.event
+async def on_message(message: discord.Message):
+    # 1. Ignoruj wiadomości wysyłane przez samego bota, żeby uniknąć pętli
+    if message.author == client.user:
+        return
+
+    # 2. Reaguj tylko w wybranym kanale (CHANNEL_ID) LUB na wiadomości prywatne (DM) LUB gdy bot zostanie oznaczony (@Bot)
+>>>>>>> cfa1fb384365aa25a885bf6327d102d7924bf8d5
     is_dm = isinstance(message.channel, discord.DMChannel)
     is_target_channel = message.channel.id == CHANNEL_ID
     is_mentioned = client.user.mentioned_in(message)
@@ -200,13 +210,24 @@ async def on_message(message: discord.Message):
     if not (is_target_channel or is_dm or is_mentioned):
         return
 
+<<<<<<< HEAD
     async with message.channel.typing():
         try:
+=======
+    # Uruchomienie wskaźnika pisania ("Bot pisze...")
+    async with message.channel.typing():
+        try:
+            # 3. Zbieranie dodatkowego kontekstu (linki z treści)
+>>>>>>> cfa1fb384365aa25a885bf6327d102d7924bf8d5
             links_context = await extract_and_fetch_links(message.content)
             full_prompt = message.content
             if links_context:
                 full_prompt += links_context
 
+<<<<<<< HEAD
+=======
+            # 4. Sprawdzanie załączników (obrazków)
+>>>>>>> cfa1fb384365aa25a885bf6327d102d7924bf8d5
             images = []
             for attachment in message.attachments:
                 if attachment.content_type and attachment.content_type.startswith("image/"):
@@ -214,16 +235,33 @@ async def on_message(message: discord.Message):
                     if img_part:
                         images.append(img_part)
 
+<<<<<<< HEAD
             # Bezpieczne wywołanie - przekazujemy argumenty zgodnie z nową strukturą w gemini.py
             if images:
                 raw_response = generateResponseGemini(prompt=full_prompt, image_parts=images)
             else:
                 raw_response = generateResponseGemini(prompt=full_prompt)
+=======
+            # 5. Wywołanie Twojej funkcji Gemini (zakładam, że przyjmuje prompt i listę obrazów)
+            # Jeśli funkcja nie obsługuje obrazów, przekaż sam full_prompt
+            if images:
+                # Przykład, jeśli funkcja przyjmuje listę obiektów Part:
+                raw_response = generateResponseGemini([full_prompt] + images)
+            else:
+                raw_response = generateResponseGemini(full_prompt)
+
+            # Opcjonalnie: obsługa asynchroniczna, jeśli generateResponseGemini wymaga 'await'
+            # raw_response = await generateResponseGemini(...)
+>>>>>>> cfa1fb384365aa25a885bf6327d102d7924bf8d5
 
             if not raw_response:
                 await message.reply("Przepraszam, nie udało mi się wygenerować odpowiedzi.")
                 return
 
+<<<<<<< HEAD
+=======
+            # 6. Dzielenie wiadomości na części (Discord ma limit 2000 znaków) i wysyłanie
+>>>>>>> cfa1fb384365aa25a885bf6327d102d7924bf8d5
             chunks = split_message(raw_response)
             for chunk in chunks:
                 await message.reply(chunk)
@@ -232,4 +270,8 @@ async def on_message(message: discord.Message):
             print(f"[Błąd on_message]: {e}")
             await message.reply("Wystąpił nieoczekiwany błąd podczas przetwarzania wiadomości.")
 
+<<<<<<< HEAD
 client.run(TOKEN)
+=======
+client.run(TOKEN)
+>>>>>>> cfa1fb384365aa25a885bf6327d102d7924bf8d5
