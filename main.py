@@ -21,20 +21,18 @@ LOG_CHANNEL_ID = 1528172889143119872
 
 FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID")
 
-# Konfiguracja uprawnień bota
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
-intents.voice_states = True  # Wymagane do poprawnego śledzenia kanałów głosowych
+intents.voice_states = True  # Śledzenie zmian stanów głosowych
 
 client = discord.Client(intents=intents)
 
 user_dm_state = {}
-SONGS_DIR = "songs"  # Nazwa folderu z piosenkami muzycznymi
+SONGS_DIR = "songs"
 
 
 def split_message(text, limit=2000):
-    """Dzieli tekst na części o maksymalnej długości `limit`."""
     return [text[i:i+limit] for i in range(0, len(text), limit) if text[i:i+limit].strip()]
 
 async def download_image_as_part(url: str, mime_type: str):
@@ -121,26 +119,26 @@ async def start_webserver():
 
 @client.event
 async def on_voice_state_update(member, before, after):
-    # Ignoruj aktywność samego bota
     if member.id == client.user.id:
         return
 
-    # Jeśli użytkownik wszedł na kanał głosowy (i nie był na nim wcześniej)
+    # Jeśli użytkownik dołączył do kanału, na którym wcześniej nie był
     if after.channel and before.channel != after.channel:
         voice_channel = after.channel
         guild = voice_channel.guild
 
-        # Sprawdź, czy bot jest już połączony w obrębie tego serwera
         voice_client = discord.utils.get(client.voice_clients, guild=guild)
 
         if not voice_client:
             try:
-                voice_client = await voice_channel.connect()
+                # Wymuszamy stabilne połączenie z kanałem
+                voice_client = await voice_channel.connect(timeout=10.0, reconnect=True)
+                print(f"[Voice] Połączono z kanałem: {voice_channel.name}")
             except Exception as e:
                 print(f"[Voice BŁĄD] Nie można połączyć z kanałem: {e}")
                 return
 
-        # Jeśli bot połączył się pomyślnie i w tym momencie nic nie gra
+        # Jeśli połączony i w tym momencie nic nie jest grane, zaczynamy odtwarzanie
         if voice_client and not voice_client.is_playing():
             await play_random_song(voice_client)
 
@@ -150,42 +148,39 @@ async def play_random_song(voice_client):
         print(f"[Voice BŁĄD] Katalog '{SONGS_DIR}' nie istnieje!")
         return
 
-    # Pobieranie listy dostępnych plików muzycznych
     songs = [f for f in os.listdir(SONGS_DIR) if f.endswith(('.mp3', '.wav', '.ogg', '.m4a'))]
     
     if not songs:
-        print(f"[Voice] Brak utworów muzycznych w katalogu '{SONGS_DIR}'.")
+        print(f"[Voice] Brak plików muzycznych w folderze '{SONGS_DIR}'.")
         return
 
     random_song = random.choice(songs)
     song_path = os.path.join(SONGS_DIR, random_song)
 
-    print(f"[Voice] Odtwarzam losowy utwór: {random_song}")
+    print(f"[Voice] Odtwarzam plik: {random_song}")
     
     def after_playing(error):
         if error:
-            print(f"[Voice BŁĄD] Wystąpił błąd podczas odtwarzania: {error}")
+            print(f"[Voice BŁĄD] Wyjątek strumienia audio: {error}")
         
-        # Sprawdzanie, czy na kanale wciąż znajduje się ktoś oprócz bota
         if voice_client.channel and len(voice_client.channel.members) > 1:
-            # Wywołanie kolejnej losowej piosenki w bezpieczny sposób
             coro = play_random_song(voice_client)
             fut = asyncio.run_coroutine_threadsafe(coro, client.loop)
             try:
                 fut.result()
             except Exception as e:
-                print(f"[Voice BŁĄD] Nie udało się wywołać kolejnego utworu: {e}")
+                print(f"[Voice BŁĄD] Błąd kolejki losowej: {e}")
         else:
-            # Jeśli nikogo już nie ma, bot opuszcza kanał
             coro = voice_client.disconnect()
             asyncio.run_coroutine_threadsafe(coro, client.loop)
-            print("[Voice] Kanał jest pusty. Bot rozłączył się.")
+            print("[Voice] Kanał opustoszał. Rozłączanie.")
 
     try:
-        # Uruchomienie odtwarzania dźwięku przez FFmpeg
-        voice_client.play(discord.FFmpegPCMAudio(song_path), after=after_playing)
+        # Opcja "-vn" wyłącza dekodowanie wideo z plików audio, co zapobiega crashom FFmpeg
+        source = discord.FFmpegPCMAudio(song_path, options="-vn")
+        voice_client.play(source, after=after_playing)
     except Exception as e:
-        print(f"[Voice BŁĄD] Wyjątek podczas próby odtworzenia {random_song}: {e}")
+        print(f"[Voice BŁĄD] Błąd krytyczny odtwarzacza: {e}")
 
 
 @client.event
@@ -214,7 +209,6 @@ async def on_message(message: discord.Message):
                     if img_part:
                         images.append(img_part)
 
-            # Bezpieczne wywołanie - przekazujemy argumenty zgodnie z nową strukturą w gemini.py
             if images:
                 raw_response = generateResponseGemini(prompt=full_prompt, image_parts=images)
             else:

@@ -52,8 +52,8 @@ def generateResponseGemini(prompt, image_parts=None, custom_instruction=None):
                 "system_instruction": selected_instruction
             }
         )
-        # Przekazanie prawidłowej, płaskiej listy obiektów contents
-        response = chat.send_message(contents=contents)
+        # NAPRAWIONE: Używamy argumentu 'message=' zamiast błędnego 'contents='
+        response = chat.send_message(message=contents)
         return response.text
     except Exception as e:
         return f"Błąd podczas generowania: {e}"
