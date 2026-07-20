@@ -115,4 +115,59 @@ async def start_webserver():
     await site.start()
     print(f"[Serwer HTTP] Serwer nasłuchuje na porcie: {port}")
 
+@client.event
+async def on_message(message: discord.Message):
+    # 1. Ignoruj wiadomości wysyłane przez samego bota, żeby uniknąć pętli
+    if message.author == client.user:
+        return
+
+    # 2. Reaguj tylko w wybranym kanale (CHANNEL_ID) LUB na wiadomości prywatne (DM) LUB gdy bot zostanie oznaczony (@Bot)
+    is_dm = isinstance(message.channel, discord.DMChannel)
+    is_target_channel = message.channel.id == CHANNEL_ID
+    is_mentioned = client.user.mentioned_in(message)
+
+    if not (is_target_channel or is_dm or is_mentioned):
+        return
+
+    # Uruchomienie wskaźnika pisania ("Bot pisze...")
+    async with message.channel.typing():
+        try:
+            # 3. Zbieranie dodatkowego kontekstu (linki z treści)
+            links_context = await extract_and_fetch_links(message.content)
+            full_prompt = message.content
+            if links_context:
+                full_prompt += links_context
+
+            # 4. Sprawdzanie załączników (obrazków)
+            images = []
+            for attachment in message.attachments:
+                if attachment.content_type and attachment.content_type.startswith("image/"):
+                    img_part = await download_image_as_part(attachment.url, attachment.content_type)
+                    if img_part:
+                        images.append(img_part)
+
+            # 5. Wywołanie Twojej funkcji Gemini (zakładam, że przyjmuje prompt i listę obrazów)
+            # Jeśli funkcja nie obsługuje obrazów, przekaż sam full_prompt
+            if images:
+                # Przykład, jeśli funkcja przyjmuje listę obiektów Part:
+                raw_response = generateResponseGemini([full_prompt] + images)
+            else:
+                raw_response = generateResponseGemini(full_prompt)
+
+            # Opcjonalnie: obsługa asynchroniczna, jeśli generateResponseGemini wymaga 'await'
+            # raw_response = await generateResponseGemini(...)
+
+            if not raw_response:
+                await message.reply("Przepraszam, nie udało mi się wygenerować odpowiedzi.")
+                return
+
+            # 6. Dzielenie wiadomości na części (Discord ma limit 2000 znaków) i wysyłanie
+            chunks = split_message(raw_response)
+            for chunk in chunks:
+                await message.reply(chunk)
+
+        except Exception as e:
+            print(f"[Błąd on_message]: {e}")
+            await message.reply("Wystąpił nieoczekiwany błąd podczas przetwarzania wiadomości.")
+
 client.run(TOKEN)
