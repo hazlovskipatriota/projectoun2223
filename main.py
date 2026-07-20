@@ -104,7 +104,7 @@ async def start_webserver():
 
 @client.event
 async def on_voice_state_update(member, before, after):
-    # Dołączanie bota i puszczenie losowej muzyki, gdy ktoś wchodzi na kanał
+    # 1. Łączenie z kanałem, gdy ktoś dołącza
     if member.id != client.user.id:
         if after.channel and before.channel != after.channel:
             voice_channel = after.channel
@@ -122,7 +122,7 @@ async def on_voice_state_update(member, before, after):
             if voice_client and not voice_client.is_playing():
                 await play_song(voice_client)
 
-    # Wychodzenie bota, jeśli został całkiem sam
+    # 2. Wychodzenie bota, jeśli został całkiem sam
     guild = member.guild
     voice_client = discord.utils.get(client.voice_clients, guild=guild)
     
@@ -146,21 +146,20 @@ async def play_song(voice_client, specific_song=None):
 
     song_path = os.path.join(SONGS_DIR, chosen_song)
     print(f"[Voice] Odtwarzam plik: {chosen_song}")
-    
-    if voice_client.is_playing():
-        voice_client.stop()
 
     def after_playing(error):
         if error:
             print(f"[Voice BŁĄD] Wyjątek strumienia audio: {error}")
         
+        # Odtwarzamy kolejny utwór tylko wtedy, gdy ktoś jeszcze jest na kanale i bot aktualnie nic nowego nie odtwarza
         if voice_client.channel and len([m for m in voice_client.channel.members if not m.bot]) > 0:
-            coro = play_song(voice_client)
-            fut = asyncio.run_coroutine_threadsafe(coro, client.loop)
-            try:
-                fut.result()
-            except Exception as e:
-                print(f"[Voice BŁĄD] Błąd pętli muzycznej: {e}")
+            if not voice_client.is_playing():
+                coro = play_song(voice_client)
+                fut = asyncio.run_coroutine_threadsafe(coro, client.loop)
+                try:
+                    fut.result()
+                except Exception as e:
+                    print(f"[Voice BŁĄD] Błąd pętli muzycznej: {e}")
         else:
             coro = voice_client.disconnect()
             asyncio.run_coroutine_threadsafe(coro, client.loop)
@@ -188,7 +187,7 @@ async def on_message(message: discord.Message):
     content_lower = message.content.lower().strip()
     voice_client = discord.utils.get(client.voice_clients, guild=message.guild)
 
-    # 1. Klasyczna tekstowa komenda "skip"
+    # 1. Klasyczna obsługa ręcznej komendy "skip"
     if any(cmd in content_lower for cmd in ["skip", "następna", "nastepna", "przełącz piosenkę", "przelacz piosenke"]):
         if voice_client and voice_client.is_playing():
             await message.reply("Odrzucam ten syf, gramy dalej.")
@@ -224,19 +223,18 @@ async def on_message(message: discord.Message):
                 await message.reply("Przepraszam, nie udało mi się wygenerować odpowiedzi.")
                 return
 
-            # Wyciągamy tag muzyczny [play:...] z tekstu wygenerowanego przez model
+            # Szukamy czy model dokleił tag [play:nazwa_piosenki.ext]
             play_match = re.search(r'\[play:(.*?)\]', raw_response)
             
-            # Całkowicie usuwamy tag z tekstu wypowiedzi, by nie zaśmiecać widoku czatu
+            # Usuwamy tag z treści, aby użytkownik widział samą wypowiedź postaci
             clean_response = re.sub(r'\[play:.*?\]', '', raw_response).strip()
 
-            # Bot wysyła WYŁĄCZNIE klimatyczną wypowiedź Grzegorza Zyska (brak spamu systemowego)
             if clean_response:
                 chunks = split_message(clean_response)
                 for chunk in chunks:
                     await message.reply(chunk)
 
-            # Przetwarzanie odtwarzania w tle na bazie dopasowanego tagu
+            # Jeśli model wysłał polecenie puszczenia piosenki
             if play_match:
                 requested_song = play_match.group(1).strip()
                 
@@ -251,11 +249,15 @@ async def on_message(message: discord.Message):
                             return
                     
                     if requested_song in songs_list:
+                        # Bezpieczna zmiana utworu: stopujemy starą piosenkę i robimy pauzę, aby wyczyścić pętlę
+                        if voice_client.is_playing():
+                            voice_client.stop()
+                            await asyncio.sleep(0.5)
+                        
                         await play_song(voice_client, specific_song=requested_song)
                     else:
-                        print(f"[Voice] Model AI wypluł niepoprawną nazwę pliku: {requested_song}")
+                        print(f"[Voice] Model AI podał niepoprawną nazwę pliku: {requested_song}")
                 else:
-                    # Opcjonalne powiadomienie, gdy ktoś prosi o muzykę, ale sam siedzi na czacie tekstowym
                     await message.reply("Wejdź na kanał głosowy, jeśli chcesz, bym zaczął grać.")
 
         except Exception as e:

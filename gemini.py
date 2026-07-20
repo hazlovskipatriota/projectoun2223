@@ -48,7 +48,6 @@ def generateResponseGemini(prompt, image_parts=None, custom_instruction=None, av
             contents.extend(image_parts)
         contents.append(prompt)
 
-        # Dynamicznie rozbudowujemy instrukcję o aktualną listę utworów z dysku bota
         base_instruction = custom_instruction if custom_instruction else instruction
         if available_songs:
             songs_list_str = ", ".join(available_songs)
