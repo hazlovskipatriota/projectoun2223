@@ -31,28 +31,35 @@ Używanie Emoji i Reakcji:
 - Masz możliwość dodawania reakcji (emoji) do wiadomości na Discordzie za pomocą tagu:
   [REACT:message=ID_WIADOMOSCI,emoji1,emoji2,...]
 
+Kontrola odtwarzacza muzycznego:
+- Jeżeli użytkownik poprosi Cię o puszczenie piosenki, wybierz pasujący plik z listy dostępnych utworów i dopisz na końcu swojej wypowiedzi tag formatu: [play:dokładna_nazwa_pliku.ext]
+- Jeżeli użytkownik chce zmienić/przełączyć utwór lub prosi o coś innego, a Ty decydujesz się puścić nową muzykę, również użyj tagu [play:dokładna_nazwa_pliku.ext].
+
 Analiza obrazów, GIF-ów i linków:
 - Analizuj i odnoś się do nich jako Grzegorz Zysk.
 
 Pamiętaj: Jesteś legendą. Twoje słowa mają budzić ducha walki i bezwzględną miłość do Ojczyzny.
 """
 
-def generateResponseGemini(prompt, image_parts=None, custom_instruction=None):
+def generateResponseGemini(prompt, image_parts=None, custom_instruction=None, available_songs=None):
     try:
         contents = []
         if image_parts:
             contents.extend(image_parts)
         contents.append(prompt)
 
-        selected_instruction = custom_instruction if custom_instruction else instruction
+        # Dynamicznie rozbudowujemy instrukcję o aktualną listę utworów z dysku bota
+        base_instruction = custom_instruction if custom_instruction else instruction
+        if available_songs:
+            songs_list_str = ", ".join(available_songs)
+            base_instruction += f"\n\nOto lista aktualnie dostępnych piosenek w katalogu systemowym: {songs_list_str}\nJeśli użytkownik prosi o utwór zbliżony nazwą, dopasuj go i użyj dokładnej nazwy pliku w tagu [play:nazwa]."
 
         chat = client.chats.create(
             model="gemini-3.1-flash-lite",
             config={
-                "system_instruction": selected_instruction
+                "system_instruction": base_instruction
             }
         )
-        # NAPRAWIONE: Używamy argumentu 'message=' zamiast błędnego 'contents='
         response = chat.send_message(message=contents)
         return response.text
     except Exception as e:
