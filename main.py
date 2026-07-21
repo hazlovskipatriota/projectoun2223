@@ -15,7 +15,8 @@ from gemini import generateResponseGemini, generateImageImagen
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+# Sztywno ustawione ID kanału, na którym bot może pisać i odpowiadać
+ALLOWED_CHANNEL_ID = 1527409836126634035
 LOG_CHANNEL_ID = 1528172889143119872
 
 FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID")
@@ -177,11 +178,8 @@ async def on_message(message: discord.Message):
     if message.author == client.user:
         return
 
-    is_dm = isinstance(message.channel, discord.DMChannel)
-    is_target_channel = message.channel.id == CHANNEL_ID
-    is_mentioned = client.user.mentioned_in(message)
-
-    if not (is_target_channel or is_dm or is_mentioned):
+    # Bot odpowiada TYLKO I WYŁĄCZNIE na kanale o ID 1527409836126634035
+    if message.channel.id != ALLOWED_CHANNEL_ID:
         return
 
     content_lower = message.content.lower().strip()
@@ -234,10 +232,11 @@ async def on_message(message: discord.Message):
                 for chunk in chunks:
                     await message.reply(chunk)
 
-            # Jeśli model wysłał polecenie puszczenia piosenki
+            # Jeśli model wygenerował polecenie puszczenia piosenki
             if play_match:
                 requested_song = play_match.group(1).strip()
                 
+                # Odtwarzamy muzykę TYLKO jeśli użytkownik faktycznie siedzi na kanale głosowym
                 if message.author.voice and message.author.voice.channel:
                     user_channel = message.author.voice.channel
                     
@@ -249,7 +248,6 @@ async def on_message(message: discord.Message):
                             return
                     
                     if requested_song in songs_list:
-                        # Bezpieczna zmiana utworu: stopujemy starą piosenkę i robimy pauzę, aby wyczyścić pętlę
                         if voice_client.is_playing():
                             voice_client.stop()
                             await asyncio.sleep(0.5)
@@ -257,8 +255,7 @@ async def on_message(message: discord.Message):
                         await play_song(voice_client, specific_song=requested_song)
                     else:
                         print(f"[Voice] Model AI podał niepoprawną nazwę pliku: {requested_song}")
-                else:
-                    await message.reply("Wejdź na kanał głosowy, jeśli chcesz, bym zaczął grać.")
+                # Usunięto blok else z komunikatem "Wejdź na kanał głosowy..."
 
         except Exception as e:
             print(f"[Błąd on_message]: {e}")
